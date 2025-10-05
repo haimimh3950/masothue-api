@@ -3,8 +3,8 @@ from flask_cors import CORS
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import time, re
 
@@ -12,7 +12,8 @@ app = Flask(__name__)
 CORS(app)
 
 def shorten_company_name(raw):
-    if not raw: return ""
+    if not raw:
+        return ""
     s = " ".join(raw.split())
     abbr = {
         "Doanh Nghiệp Tư Nhân": "DNTN",
@@ -28,9 +29,13 @@ def shorten_company_name(raw):
     }
     for k, v in abbr.items():
         s = re.sub(k, v, s, flags=re.I)
+    # viết hoa chữ cái đầu
+    s = " ".join([w.capitalize() if w.upper() not in abbr.values() else w.upper() for w in s.split()])
     return s
 
 def normalize_address(addr):
+    if not addr:
+        return ""
     s = re.sub(r"(?i)^địa chỉ thuế[:\s]*", "", addr)
     s = re.sub(r",?\s*Việt Nam$", "", s)
     s = re.sub(r"(?i)(Tỉnh|Thành phố|Phường|Xã|Huyện|Thị xã|Thị trấn)\s+", "", s)
@@ -42,40 +47,49 @@ def api_mst():
     if not re.match(r"^\d{10}(-\d{3})?$", code):
         return jsonify({"error":"MST không hợp lệ"}), 400
     try:
-        # Cấu hình Chrome headless
         options = Options()
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1280,900")
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
+        # Bước 1: mở trang tìm kiếm
         driver.get(f"https://www.masothue.com/Search?q={code}")
-        time.sleep(2)
+        time.sleep(1.5)
 
+        # Bước 2: click vào dòng đầu tiên để vào link chi tiết
         try:
-            first = driver.find_element(By.CSS_SELECTOR, ".table.table-striped tbody tr td a")
+            first = driver.find_element(By.CSS_SELECTOR, "table.table-striped tbody tr td a")
             first.click()
-            time.sleep(1)
+            time.sleep(1.2)
         except:
             pass
 
-        soup = BeautifulSoup(driver.page_source, "html.parser")
+        # Bước 3: lấy HTML của trang chi tiết
+        html = driver.page_source
+        driver.quit()
+
+        soup = BeautifulSoup(html, "html.parser")
         name = soup.select_one("h1 span.copy")
         tax = soup.select_one("td[itemprop='taxID'] span.copy")
         addr = soup.select_one("td[itemprop='address'] span.copy")
 
-        name = name.text.strip() if name else ""
-        tax = tax.text.strip() if tax else code
-        addr = addr.text.strip() if addr else ""
+        name_text = name.text.strip() if name else ""
+        tax_text = tax.text.strip() if tax else code
+        addr_text = addr.text.strip() if addr else ""
 
-        driver.quit()
+        if not name_text:
+            return jsonify({"error":"Không tìm thấy thông tin doanh nghiệp."}), 404
 
-        nameU = shorten_company_name(name)
-        addrU = normalize_address(addr)
+        # Chuẩn hóa lại
+        nameU = shorten_company_name(name_text)
+        addrU = normalize_address(addr_text)
 
         return jsonify({
+            "tax_code": tax_text,
             "name_unicode": nameU,
-            "tax_code": tax,
             "addr_unicode": addrU
         })
     except Exception as e:
